@@ -1,0 +1,26 @@
+# Python virtual environment
+venv/
+env/
+.venv/
+
+# Environment and secrets - NEVER COMMIT REAL SECRETS
+.env
+*.pem
+*.key
+serviceAccountKey.json
+firebase_credentials.json
+
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/

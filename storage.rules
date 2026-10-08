@@ -1,0 +1,61 @@
+rules_version = '2';
+
+// Firebase Cloud Storage Security Rules
+// Restricts access to authorized medical documents, patient imaging, and clinical reports.
+// Strict access control: No public read or write access under any circumstances.
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isSelf(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isStaff() {
+      return isAuthenticated() && (
+        firestore.exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
+        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role in ['doctor', 'admin'] &&
+        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.status == 'active'
+      );
+    }
+
+    function isValidMedicalFile() {
+      return request.resource == null || (
+        request.resource.size <= 25 * 1024 * 1024 && // 25 MB max file size
+        request.resource.contentType.matches('image/.*') ||
+        request.resource.contentType.matches('application/pdf') ||
+        request.resource.contentType.matches('application/dicom')
+      );
+    }
+
+    // Patient files & medical record uploads: /patients/{patientId}/{allPaths=**}
+    match /patients/{patientId}/{allPaths=**} {
+      // Read: Patient can read their own documents; authorized clinical staff can read
+      allow read: if isSelf(patientId) || isStaff();
+      // Write: Patient can upload their own files; doctors and admins can upload on their behalf
+      allow write: if (isSelf(patientId) || isStaff()) && isValidMedicalFile();
+    }
+
+    // Doctor profile pictures & credentials: /doctors/{doctorId}/{allPaths=**}
+    match /doctors/{doctorId}/{allPaths=**} {
+      // Authenticated users can view doctor public badges/profiles
+      allow read: if isAuthenticated();
+      // Only the doctor or admin can write
+      allow write: if (isSelf(doctorId) || isStaff()) && isValidMedicalFile();
+    }
+
+    // General clinical reports: /clinical_reports/{reportId}
+    match /clinical_reports/{reportId} {
+      allow read: if isStaff();
+      allow write: if isStaff() && isValidMedicalFile();
+    }
+
+    // Default deny for any other path
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

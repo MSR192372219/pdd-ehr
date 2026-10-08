@@ -1,0 +1,35 @@
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "ehrsystem-32674f7e",
+          "appId": "1:308264747529:android:31527d23ea9bb9b9bdaed8",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "ehrsystem-32674f7e",
+          "configurations": {
+            "android": "1:308264747529:android:31527d23ea9bb9b9bdaed8",
+            "web": "1:308264747529:web:a6062fe62e73860bbdaed8",
+            "windows": "1:308264747529:web:d64203aa90e99457bdaed8"
+          }
+        }
+      }
+    }
+  },
+  "firestore": {
+    "database": "default",
+    "location": "asia-south1",
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "storage": {
+    "rules": "storage.rules"
+  },
+  "functions": {
+    "source": "functions"
+  }
+}

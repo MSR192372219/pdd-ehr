@@ -1,0 +1,193 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper function to check if request is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Helper function to check if user is accessing their own UID document
+    function isSelf(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Helper function to verify caller has active Admin role
+    function isAdmin() {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'active';
+    }
+
+    // Helper function to verify caller has active Doctor role
+    function isDoctor() {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'doctor' &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'active';
+    }
+
+    // Rules for 'users' collection
+    match /users/{userId} {
+      // Authenticated users can read their own profile; Admin/Doctor can read profiles for management
+      allow read: if isSelf(userId) || isAdmin() || isDoctor();
+      // Allow document creation upon account registration by Self or Admin
+      allow create: if isSelf(userId) || isAdmin();
+      // Allow updates only if non-admin does NOT modify 'role' or 'patientId'
+      allow update: if (isSelf(userId) || isAdmin()) && 
+        (isAdmin() || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'patientId']));
+      allow delete: if isAdmin();
+    }
+
+    // Rules for counters collection (patient ID counter)
+    // STRICT SECURITY: ONLY active Admins can read or write the counter.
+    // Patients and Doctors are strictly denied access (PERMISSION_DENIED).
+    match /counters/{counterId} {
+      allow read, write: if isAdmin();
+    }
+
+    // Rules for patients collection
+    match /patients/{patientId} {
+      // Admin and Doctor can read all patient records; Patient can read only their own record
+      allow read: if isAdmin() || isDoctor() || isSelf(patientId) || (isAuthenticated() && resource.data.uid == request.auth.uid);
+      // Admin and Doctor can write; Patient can update their own profile fields except patientId and role
+      allow create: if isAdmin() || isDoctor() || isSelf(patientId);
+      allow update: if isAdmin() || isDoctor() || (
+        (isSelf(patientId) || resource.data.uid == request.auth.uid) &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'patientId'])
+      );
+      allow delete: if isAdmin();
+    }
+
+    // Rules for doctors collection
+    match /doctors/{doctorId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // Rules for appointments collection
+    match /appointments/{appointmentId} {
+      // Read: Patient whose UID matches patientId, Admin, Doctor, or patient matching stored patientId
+      allow read: if isAuthenticated() && (
+        resource.data.patientId == request.auth.uid ||
+        isAdmin() ||
+        isDoctor() ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         resource.data.patientId == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.patientId)
+      );
+      
+      // Create: Patient creating for their own UID, or Admin/Doctor
+      allow create: if isAuthenticated() && (
+        (
+          request.resource.data.patientId == request.auth.uid &&
+          request.resource.data.status in ['Scheduled', 'Booked']
+        ) ||
+        isAdmin() ||
+        isDoctor()
+      );
+
+      // Update: Patient updating their own appointment (cancellation without changing ownership), or Admin/Doctor
+      allow update: if isAuthenticated() && (
+        (
+          resource.data.patientId == request.auth.uid &&
+          // Patient cannot change patientId, doctorId, or createdAt
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['patientId', 'doctorId', 'createdAt']) &&
+          // Patient can only cancel their own scheduled/booked appointment
+          (request.resource.data.status == resource.data.status || 
+           (resource.data.status in ['Scheduled', 'Booked'] && request.resource.data.status == 'Cancelled'))
+        ) ||
+        isAdmin() ||
+        isDoctor()
+      );
+
+      // Delete: Admin only
+      allow delete: if isAdmin();
+    }
+
+    // Rules for appointment_slots collection (concurrency & double-booking prevention)
+    match /appointment_slots/{slotId} {
+      // Any authenticated user can read slots to check availability
+      allow read: if isAuthenticated();
+
+      // Create: Patient booking for their own UID, or Admin/Doctor
+      allow create: if isAuthenticated() && (
+        (
+          request.resource.data.patientId == request.auth.uid &&
+          request.resource.data.status == 'active'
+        ) ||
+        isAdmin() ||
+        isDoctor()
+      );
+
+      // Update: Admin or Doctor only (Patients cannot overwrite or transfer slots)
+      allow update: if isAdmin() || isDoctor();
+
+      // Delete: Patient who owns the slot when cancelling, Admin, or Doctor
+      allow delete: if isAuthenticated() && (
+        resource.data.patientId == request.auth.uid ||
+        isAdmin() ||
+        isDoctor()
+      );
+    }
+
+    // Rules for medicines collection
+    match /medicines/{medicineId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() || isDoctor();
+    }
+
+    // Rules for prescriptions collection
+    match /prescriptions/{prescriptionId} {
+      // Read: Patient whose UID matches patientId, Admin, or Doctor
+      allow read: if isAuthenticated() && (
+        resource.data.patientId == request.auth.uid ||
+        isAdmin() ||
+        isDoctor() ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         resource.data.patientId == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.patientId)
+      );
+
+      // Create: Doctor or Admin only
+      allow create: if isAuthenticated() && (
+        isDoctor() || isAdmin()
+      );
+
+      // Update:
+      // Doctor and Admin can update prescriptions.
+      // Patient can ONLY update compliance tracking fields (e.g. takenLog, takenToday, updatedAt)
+      // Patient CANNOT modify medicine, dosage, frequency, startDate, endDate, patientId, doctorId, or diagnosis
+      allow update: if isAuthenticated() && (
+        isDoctor() || isAdmin() || (
+          resource.data.patientId == request.auth.uid &&
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+            'patientId', 'doctorId', 'doctorUid', 'doctorName', 'patientName',
+            'diagnosis', 'medicines', 'medicine', 'dosage', 'frequency',
+            'startDate', 'endDate', 'instructions', 'createdAt'
+          ])
+        )
+      );
+
+      // Delete: Admin only
+      allow delete: if isAdmin();
+    }
+
+    // Rules for medical_records collection
+    match /medical_records/{recordId} {
+      allow read: if isAdmin() || isDoctor() || 
+        (isAuthenticated() && (resource.data.patientId == request.auth.uid || resource.data.patientId == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.patientId));
+      allow write: if isAdmin() || isDoctor();
+    }
+
+    // Rules for blockchain_proofs collection (Phase 3 Blockchain Integrity)
+    // Cryptographic proofs anchored to smart contract. Immutable after creation.
+    // Authenticated users can read proofs to verify record integrity.
+    // Direct client creation/modification is denied to prevent forgery; created via trusted backend or Admin.
+    match /blockchain_proofs/{proofId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+  }
+}
+
