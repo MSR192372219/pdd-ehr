@@ -191,6 +191,7 @@ jobs:
     name: "📊 Compile Master Report & Deploy"
     runs-on: ubuntu-latest
     needs: [selenium, appium, unit_api, validation, deployment, load_testing]
+    if: always()
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -200,6 +201,25 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Compile Master Test Summary
+      - name: Compile Master Test Summary & HTML Report
         run: |
           python tests/e2e/generate_github_summary.py
+          python tests/e2e/generate_html_report.py
+
+      - name: Upload Test Cases & Excel Workbooks Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Healthcare-EHR-Test-Cases-Excel
+          path: |
+            healthcare_ehr_all_test_cases_600.xlsx
+            healthcare_ehr_test_suite_600.xlsx
+          retention-days: 30
+
+      - name: Upload E2E Master Execution Reports Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: E2E-Master-Execution-Report
+          path: |
+            docs/testing/e2e_master_report.html
+            docs/testing/
+          retention-days: 30
